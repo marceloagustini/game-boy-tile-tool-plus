@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, Menu, MenuItem } = require('electron');
+const { app, BrowserWindow, ipcMain, session, Menu, MenuItem, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -14,7 +14,7 @@ const createWindow = () => {
   mainWindow = new BrowserWindow({
     width: 650,
     height: 450,
-    resizable: false,
+    resizable: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },
@@ -87,47 +87,98 @@ app.on('activate', () => {
 // In this file you can include the rest of your app's specific main process
 // code. You can also put them in separate files and import them here.
 
+const processFile = (filePath, content) => {
+  try {
+    const json = JSON.parse(content.toString())
+    if (json.sprites) {
+      mainWindow.webContents.send("spritesLoaded", json)
+      return
+    }
+  } catch (e) {
+    // Not a JSON file, or invalid JSON. Continue with C parsing.
+  }
+
+  let name = 'Tileset'
+  let sprites = []
+  let maps = []
+
+  const chunks = content.toString().split('unsigned char ').filter(chunk => chunk.length > 0)
+
+  chunks.forEach(chunk => {
+    const dataStrings = chunk.toString()
+      .split('\n')
+      .map(line => line.trim())
+
+    const foundName = dataStrings[0].split('[')[0]
+
+    if (foundName.slice(-5) === 'Tiles') {
+      sprites = loadSprites(dataStrings)
+      name = foundName.slice(0, -5)
+    }
+
+    if (foundName.slice(-3) === 'Map') {
+      const [mapData, mapWidth, mapHeight] = loadMap(dataStrings)
+      maps.push({
+        name: foundName.slice(0, -3) || 'Map',
+        width: mapWidth,
+        height: mapHeight,
+        oldWidth: mapWidth,
+        oldHeight: mapHeight,
+        data: mapData
+      })
+    }
+  })
+
+  mainWindow.webContents.send("spritesLoaded", {
+    name,
+    sprites,
+    maps,
+  });
+}
+
 ipcMain.on("loadFile", (event, args) => {
   fs.readFile(args, (error, data) => {
     if (error) {
       console.error(error)
       return
     }
-
-    let name = 'Tileset'
-    let sprites = []
-    let map = []
-    let mapWidth = 20
-    let mapHeight = 18
-
-    const chunks = data.toString().split('unsigned char ').filter(chunk => chunk.length > 0)
-
-    chunks.forEach(chunk => {
-      const dataStrings = chunk.toString()
-        .split('\n')
-        .map(line => line.trim())
-
-      const foundName = dataStrings[0].split('[')[0]
-
-      if (foundName.slice(-5) === 'Tiles') {
-        sprites = loadSprites(dataStrings)
-        name = foundName.slice(0, -5)
-      }
-
-      if (foundName.slice(-3) === 'Map') {
-        [map, mapWidth, mapHeight] = loadMap(dataStrings)
-      }
-    })
-
-    mainWindow.webContents.send("spritesLoaded", {
-      name,
-      sprites,
-      map,
-      mapWidth,
-      mapHeight,
-    });
+    processFile(args, data)
   });
 });
+
+ipcMain.on("openFile", (event) => {
+  dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [
+      { name: 'Project File', extensions: ['json'] },
+      { name: 'C/Text File', extensions: ['c', 'txt'] }
+    ]
+  }).then(({ canceled, filePaths }) => {
+    if (!canceled && filePaths.length > 0) {
+      const filePath = filePaths[0]
+      fs.readFile(filePath, (err, data) => {
+        if (err) {
+          console.error(err)
+          return
+        }
+        processFile(filePath, data)
+      })
+    }
+  })
+})
+
+ipcMain.on("saveFile", (event, content) => {
+  dialog.showSaveDialog({
+    defaultPath: 'project.json',
+    filters: [{ name: 'Project File', extensions: ['json'] }]
+  }).then(({ canceled, filePath }) => {
+    if (!canceled && filePath) {
+      fs.writeFile(filePath, content, (err) => {
+        if (err) console.error(err)
+      })
+    }
+  })
+})
 
 const loadSprites = (dataStrings) => {
   return dataStrings.filter(line => line[0] === '0')
