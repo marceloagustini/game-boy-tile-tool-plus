@@ -90,7 +90,7 @@ app.on('activate', () => {
 const processFile = (filePath, content) => {
   try {
     const json = JSON.parse(content.toString())
-    if (json.sprites) {
+    if (json.sprites || json.spriteActors) {
       mainWindow.webContents.send("spritesLoaded", json)
       return
     }
